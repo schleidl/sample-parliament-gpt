@@ -1,0 +1,8 @@
+# The image installs its own (Linux/ARM64) deps via `npm ci`; copying the host tree over
+# them would ship host-native binaries. Also keeps CDK asset hashing fast.
+node_modules
+.next
+coverage
+.env
+.env.*
+!.env.example

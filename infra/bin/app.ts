@@ -74,6 +74,33 @@ const certStack =
       })
     : undefined;
 
+// Prepaid credits (docs/billing.md): off unless --context billing=true. Every price knob
+// is optional; unset ones fall back to the app defaults.
+const ctx = (k: string): string | undefined => {
+  const v = app.node.tryGetContext(k);
+  return v === undefined || v === null || String(v).trim() === "" ? undefined : String(v);
+};
+const ctxNum = (k: string): number | undefined => {
+  const v = ctx(k);
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) throw new Error(`Context ${k} must be a non-negative number, got "${v}".`);
+  return n;
+};
+const billing =
+  ctx("billing")?.toLowerCase() === "true"
+    ? {
+        currency: ctx("billingCurrency"),
+        inputPricePerMTokCents: ctxNum("billingInputPricePerMTokCents"),
+        outputPricePerMTokCents: ctxNum("billingOutputPricePerMTokCents"),
+        minChargeCents: ctxNum("billingMinChargeCents"),
+        holdCents: ctxNum("billingHoldCents"),
+        freeCreditCents: ctxNum("billingFreeCreditCents"),
+        topupAmountsCents: ctx("billingTopupAmountsCents")?.split(",").map((s) => Number(s.trim())),
+        automaticTax: ctx("billingAutomaticTax")?.toLowerCase() === "true",
+      }
+    : undefined;
+
 const frontend = new FrontendStack(app, `ParlamentGptFrontend-${suffix}`, {
   env,
   crossRegionReferences: true,
@@ -95,6 +122,7 @@ const frontend = new FrontendStack(app, `ParlamentGptFrontend-${suffix}`, {
   domainName,
   hostedZoneDomain,
   certificate: certStack?.certificate,
+  billing,
 });
 frontend.addDependency(network);
 frontend.addDependency(agent);

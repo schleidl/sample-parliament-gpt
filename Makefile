@@ -6,7 +6,7 @@ REGION ?= eu-central-1
 # Makefile.local win over every `?=` default below.
 -include Makefile.local
 
-.PHONY: help test test-shared test-lambdas test-agent test-infra test-frontend gen-types gen-types-check build build-frontend build-agent synth deploy deploy-demo sync-public destroy fill-secret create-user user-pool-id dev-agent dev-frontend
+.PHONY: help test test-shared test-lambdas test-agent test-infra test-frontend gen-types gen-types-check build build-frontend build-agent synth deploy deploy-demo sync-public destroy fill-secret fill-stripe-secret create-user user-pool-id dev-agent dev-frontend
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-16s %s\n", $$1, $$2}'
@@ -115,6 +115,14 @@ fill-secret: ## Put a source API key into Secrets Manager: make fill-secret KEY=
 	  --secret-id "$(or $(SECRET),parlamentgpt/dip-api-key)" \
 	  --secret-string '{"apiKey":"$(KEY)"}'
 	@echo "Note: warm Lambda containers cache the key for their lifetime; wait for recycle or bump the function config."
+
+# Prepaid credits (docs/billing.md). Recipe lines are silenced so keys never echo.
+fill-stripe-secret: ## Put Stripe keys into Secrets Manager: make fill-stripe-secret STRIPE_KEY=sk_... STRIPE_WEBHOOK_SECRET=whsec_... SUFFIX=...
+	@test -n "$(STRIPE_KEY)" -a -n "$(STRIPE_WEBHOOK_SECRET)" || (echo "Usage: make fill-stripe-secret STRIPE_KEY=sk_... STRIPE_WEBHOOK_SECRET=whsec_... [SUFFIX=...] [REGION=...]"; exit 1)
+	@printf '{"secretKey":"%s","webhookSecret":"%s"}' "$(STRIPE_KEY)" "$(STRIPE_WEBHOOK_SECRET)" | \
+	  aws secretsmanager put-secret-value --region $(REGION) \
+	    --secret-id "parlamentgpt/stripe-$(SUFFIX)" --secret-string file:///dev/stdin >/dev/null
+	@echo "Stripe keys stored in parlamentgpt/stripe-$(SUFFIX); the app picks them up within 5 minutes."
 
 ## ---- user management (Cognito) ----
 SUFFIX ?= sample

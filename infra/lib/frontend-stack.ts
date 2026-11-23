@@ -21,6 +21,18 @@ import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 
+/** Prepaid credits ("car-wash billing", docs/billing.md). All amounts in cents. */
+export interface BillingProps {
+  readonly currency?: string;
+  readonly inputPricePerMTokCents?: number;
+  readonly outputPricePerMTokCents?: number;
+  readonly minChargeCents?: number;
+  readonly holdCents?: number;
+  readonly freeCreditCents?: number;
+  readonly topupAmountsCents?: number[];
+  readonly automaticTax?: boolean;
+}
+
 export interface FrontendStackProps extends StackProps {
   readonly vpc: ec2.IVpc;
   readonly agentRuntimeArn: string;
@@ -62,6 +74,8 @@ export interface FrontendStackProps extends StackProps {
    * into the frontend image at build time so the UI advertises exactly what is deployed.
    */
   readonly enabledJurisdictionKeys?: string[];
+  /** Enable prepaid credits. Unset = no billing resources at all (upstream behaviour). */
+  readonly billing?: BillingProps;
 }
 
 /**
@@ -376,6 +390,43 @@ export class FrontendStack extends Stack {
       metricValue: "1",
     });
 
+    // --- Prepaid credits (opt-in) ---
+    // Stripe keys live in Secrets Manager, created EMPTY and RETAINed like the source API
+    // keys; the app reads them at runtime (not as an ECS secret), so an unfilled secret
+    // cannot stop the task from starting, and filling it needs no redeploy.
+    const billingEnv: Record<string, string> = {};
+    if (props.billing) {
+      const b = props.billing;
+      const stripeSecret = new secretsmanager.Secret(this, "StripeSecret", {
+        secretName: `parlamentgpt/stripe-${props.suffix}`,
+        description: 'Stripe keys for prepaid credits, JSON {"secretKey":"sk_...","webhookSecret":"whsec_..."}',
+        removalPolicy: RemovalPolicy.RETAIN,
+      });
+      stripeSecret.grantRead(taskDef.taskRole);
+      const num = (v: number | undefined) => (v === undefined ? undefined : String(v));
+      const entries: Record<string, string | undefined> = {
+        BILLING_ENABLED: "true",
+        BILLING_SECRET_ARN: stripeSecret.secretArn,
+        BILLING_CURRENCY: b.currency,
+        BILLING_INPUT_PRICE_PER_MTOK_CENTS: num(b.inputPricePerMTokCents),
+        BILLING_OUTPUT_PRICE_PER_MTOK_CENTS: num(b.outputPricePerMTokCents),
+        BILLING_MIN_CHARGE_CENTS: num(b.minChargeCents),
+        BILLING_HOLD_CENTS: num(b.holdCents),
+        BILLING_FREE_CREDIT_CENTS: num(b.freeCreditCents),
+        BILLING_TOPUP_AMOUNTS_CENTS: b.topupAmountsCents?.join(","),
+        BILLING_AUTOMATIC_TAX: b.automaticTax ? "true" : undefined,
+      };
+      for (const [k, v] of Object.entries(entries)) if (v !== undefined) billingEnv[k] = v;
+      new CfnOutput(this, "StripeSecretArn", {
+        value: stripeSecret.secretArn,
+        description: "Fill with the Stripe secret key + webhook signing secret (docs/billing.md).",
+      });
+      new CfnOutput(this, "StripeWebhookUrl", {
+        value: `https://${props.domainName ?? distribution.distributionDomainName}/api/billing/webhook`,
+        description: "Register this endpoint in Stripe for checkout.session.* events.",
+      });
+    }
+
     const container = taskDef.addContainer("web", {
       image: ecs.ContainerImage.fromDockerImageAsset(image),
       logging: ecs.LogDrivers.awsLogs({
@@ -390,6 +441,7 @@ export class FrontendStack extends Stack {
         COGNITO_CLIENT_ID: userPoolClient.userPoolClientId,
         COGNITO_DOMAIN: `https://${domainPrefix}.auth.${region}.amazoncognito.com`,
         ...(props.defaultDebugMode ? { DEFAULT_DEBUG_MODE: "true" } : {}),
+        ...billingEnv,
         PORT: "3000",
         HOSTNAME: "0.0.0.0",
       },

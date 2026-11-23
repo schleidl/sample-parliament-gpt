@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ID_TOKEN_COOKIE, verifyIdToken } from "@/lib/auth";
 
-// Protect every route except the auth endpoints and static assets. The Cognito hosted UI
-// handles sign-in/sign-up; there is no app-local login page.
+// Protect every route except the auth endpoints, the Stripe webhook (signature-verified,
+// called by Stripe, never by a browser) and static assets. The Cognito hosted UI handles
+// sign-in/sign-up; there is no app-local login page.
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/auth).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|api/auth|api/billing/webhook).*)"],
 };
 
 export async function middleware(req: NextRequest) {
