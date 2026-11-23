@@ -6,3 +6,5 @@ node_modules/
 !jest.config.js
 cdk.out/
 .cdk.staging/
+# Lambda sources are hand-written CommonJS, not tsc output.
+!lambda/**/*.js
