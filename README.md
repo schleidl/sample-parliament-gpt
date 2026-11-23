@@ -144,6 +144,7 @@ Via CDK context in `infra/cdk.json` or `--context` on the CLI:
 | `selfSignUpEnabled` | `true` | Set `false` to disable self sign-up entirely (operator-created users only) |
 | `defaultDebugMode` | `false` | `true` makes new users start with the technical trace visible (demo deployments); users can toggle it either way |
 | `signupEmailFrom` | unset | Optional SES sender for Cognito's verification mails. Unset = Cognito's default sender (~50 mails/day, no SES setup needed). When inside `hostedZoneDomain`, an SES identity with DKIM is created. An SES sandbox account only delivers to verified recipients |
+| `billing` | `false` | Prepaid credits: users top up via Stripe Checkout and pay per answer. Price, hold, free-credit and top-up knobs (`billing*`) and setup are in [docs/billing.md](docs/billing.md) |
 | `domainName` / `hostedZoneDomain` | unset | Optional custom domain: CloudFront alias + us-east-1 ACM certificate + Route 53 alias records |
 
 Deploy an isolated copy with a different suffix:

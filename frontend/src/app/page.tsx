@@ -16,6 +16,8 @@ import {
 } from "@/lib/jurisdictions";
 import { MESSAGES } from "@/lib/messages";
 
+import { BillingBadge, type BillingState, formatCost, TopupButtons, useBilling } from "./Billing";
+
 type Step =
   | { type: "reasoning"; text: string }
   | { type: "tool_call"; tool?: string; jurisdiction?: string; input?: Record<string, unknown> }
@@ -39,7 +41,14 @@ type ChatMessage = {
   sources?: Source[];
   steps?: Step[];
   loading?: boolean;
+  /** Prepaid credits: what this answer cost (from the final `billing` SSE event). */
+  costMicros?: number;
+  currency?: string;
+  /** The question was refused for lack of credit (HTTP 402). */
+  outOfCredit?: boolean;
 };
+
+type BillingEvent = { currency?: string; charged_micros?: number; balance_micros?: number | null };
 
 type SessionSummary = { id: string; title: string; updatedAt: string; messageCount: number };
 type Settings = { confidential: boolean; debug: boolean; persistence: boolean };
@@ -108,6 +117,7 @@ function patchLast(setMessages: SetMessages, patch: (m: ChatMessage) => ChatMess
 async function consumeStream(
   body: ReadableStream<Uint8Array>,
   setMessages: SetMessages,
+  onBilling?: (event: BillingEvent) => void,
 ): Promise<boolean> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -124,6 +134,14 @@ async function consumeStream(
         text: typeof event.answer === "string" ? event.answer : "",
         sources: Array.isArray(event.sources) ? (event.sources as Source[]) : [],
       }));
+    } else if (type === "billing") {
+      const ev = event as BillingEvent;
+      patchLast(setMessages, (m) => ({
+        ...m,
+        costMicros: typeof ev.charged_micros === "number" ? ev.charged_micros : undefined,
+        currency: typeof ev.currency === "string" ? ev.currency : undefined,
+      }));
+      onBilling?.(ev);
     } else if (
       type === "reasoning" ||
       type === "tool_call" ||
@@ -199,6 +217,7 @@ export default function Home() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { billing, refresh: refreshBilling, setBalance } = useBilling();
   const endRef = useRef<HTMLDivElement>(null);
   const nextId = useRef(1);
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -359,9 +378,23 @@ export default function Home() {
         credentials: "same-origin",
       });
 
+      if (res.status === 402) {
+        patchLast(setMessages, (m) => ({
+          ...m,
+          loading: false,
+          text: MESSAGES.outOfCredit,
+          outOfCredit: true,
+        }));
+        await refreshBilling();
+        return;
+      }
+
       const ct = res.headers.get("content-type") ?? "";
       if (ct.includes("text/event-stream") && res.body) {
-        const answered = await consumeStream(res.body, setMessages);
+        const answered = await consumeStream(res.body, setMessages, (ev) => {
+          if (typeof ev.balance_micros === "number") setBalance(ev.balance_micros);
+          else void refreshBilling();
+        });
         if (!answered) {
           patchLast(setMessages, (m) => ({
             ...m,
@@ -430,6 +463,7 @@ export default function Home() {
             </div>
           </div>
           <div className="top-nav-actions">
+            {billing && <BillingBadge billing={billing} />}
             {settings.persistence && (
               <Toggle
                 label="Confidential"
@@ -529,7 +563,7 @@ export default function Home() {
               </div>
             )}
             {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} debug={settings.debug} />
+              <MessageBubble key={m.id} message={m} debug={settings.debug} billing={billing} />
             ))}
             <div ref={endRef} />
           </div>
@@ -581,7 +615,15 @@ function Toggle({
   );
 }
 
-function MessageBubble({ message, debug }: { message: ChatMessage; debug: boolean }) {
+function MessageBubble({
+  message,
+  debug,
+  billing,
+}: {
+  message: ChatMessage;
+  debug: boolean;
+  billing: BillingState | null;
+}) {
   if (message.role === "user") {
     return (
       <div className="chat-user-row">
@@ -618,6 +660,14 @@ function MessageBubble({ message, debug }: { message: ChatMessage; debug: boolea
             )}
             {message.sources && message.sources.length > 0 && (
               <Citations sources={message.sources} />
+            )}
+            {message.outOfCredit && billing && <TopupButtons billing={billing} />}
+            {typeof message.costMicros === "number" && message.currency && (
+              <p className="answer-cost">
+                {message.costMicros > 0
+                  ? `${MESSAGES.answerCost} ${formatCost(message.costMicros, message.currency)}`
+                  : MESSAGES.answerFree}
+              </p>
             )}
           </div>
         </div>

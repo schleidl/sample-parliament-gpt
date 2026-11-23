@@ -8,6 +8,23 @@ Per-jurisdiction data-source details live in `docs/multi-gov/CHANGES.md`.
 
 ## [Unreleased]
 
+### Added
+- Prepaid credits ("car-wash billing", opt-in via `--context billing=true`): users top up
+  through Stripe Checkout and each answer is metered from the agent's `model_metrics`
+  token counts. A reservation is taken before the agent runs (HTTP 402 at zero balance)
+  and settled afterwards; failed, interrupted and guardrail-refused runs are free. The
+  webhook is signature-verified and idempotent, and credits the amount net of tax. Stripe
+  keys live in an empty, retained Secrets Manager secret read at runtime. New SSE event
+  `billing`, routes `/api/billing{,/checkout,/webhook}`, `make fill-stripe-secret`. See
+  `docs/billing.md`.
+
+### Fixed
+- `infra/lambda/pre-signup/` (Cognito PreSignUp trigger) was missing from the repository
+  because `infra/.gitignore` ignored every `*.js`; synth failed and the matcher tests could
+  not load. Restored and un-ignored.
+- `frontend/.dockerignore` added: `COPY . .` copied host `node_modules` (host-native
+  binaries) over the image's own `npm ci` install. This also makes CDK asset hashing fast.
+
 ### Security
 - Container OS patch round: base-image digests refreshed and a dated `OS_PATCH_STAMP`
   build arg added before the apt-upgrade layer, so a rebuild cannot replay a stale

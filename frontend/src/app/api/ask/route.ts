@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/authGuard";
 import { streamAgentRuntime, hasLocalAgent, streamLocalAgent, type HistoryTurn } from "./agentClient";
 import { rateLimit } from "./rateLimit";
+import { billingConfig } from "@/lib/billing/config";
+import { ledgerConfigured, reserve, settle } from "@/lib/billing/ledger";
+import { meteredStream } from "@/lib/billing/meteredStream";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,6 +59,34 @@ export async function POST(req: NextRequest) {
         .slice(-12)
     : [];
 
+  // Prepaid credits (docs/billing.md B4): reserve before the agent runs, so a user can
+  // never spend money they do not have. Refused BEFORE any model invocation.
+  const billing = billingConfig();
+  const metered = billing.enabled && ledgerConfigured();
+  let reserved = 0;
+  if (metered) {
+    let held: number | null;
+    try {
+      held = await reserve(user.sub, billing.holdMicros, billing.minChargeMicros, billing.freeCreditMicros);
+    } catch (err) {
+      // Fail closed: without a working ledger we cannot bill, so we do not serve.
+      console.error("billing reserve failed:", (err as Error)?.name ?? "error");
+      return NextResponse.json({ answer: "", sources: [] }, { status: 503 });
+    }
+    if (held === null) {
+      return NextResponse.json(
+        { answer: "", sources: [], error: "insufficient_credit" },
+        { status: 402 },
+      );
+    }
+    reserved = held;
+  }
+  const release = () => (metered ? settle(user.sub, reserved, 0).catch(() => 0) : Promise.resolve(0));
+  const wrap = (stream: ReadableStream<Uint8Array>) =>
+    metered
+      ? meteredStream(stream, billing, reserved, (charged) => settle(user.sub, reserved, charged))
+      : stream;
+
   const sseHeaders = {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
@@ -67,11 +98,13 @@ export async function POST(req: NextRequest) {
     try {
       const upstream = await streamLocalAgent(prompt, history);
       if (!upstream.ok || !upstream.body) {
+        await release();
         return NextResponse.json({ answer: "", sources: [] }, { status: 502 });
       }
-      return new Response(upstream.body, { status: 200, headers: sseHeaders });
+      return new Response(wrap(upstream.body), { status: 200, headers: sseHeaders });
     } catch (err) {
       console.error("agent stream failed:", err);
+      await release();
       return NextResponse.json({ answer: "", sources: [] }, { status: 502 });
     }
   }
@@ -79,9 +112,10 @@ export async function POST(req: NextRequest) {
   // Production: stream from AgentCore runtime.
   try {
     const stream = await streamAgentRuntime(prompt, history);
-    return new Response(stream, { status: 200, headers: sseHeaders });
+    return new Response(wrap(stream), { status: 200, headers: sseHeaders });
   } catch (err) {
     console.error("agent invocation failed:", err);
+    await release();
     return NextResponse.json({ answer: "", sources: [] }, { status: 502 });
   }
 }

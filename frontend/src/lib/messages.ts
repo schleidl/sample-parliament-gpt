@@ -29,4 +29,14 @@ export const MESSAGES = {
   stageLambda: "lambda",
   guardrailIntervened: "Guardrail intervened",
   retrievedLabel: "retrieved",
+  // Prepaid credits (docs/billing.md)
+  topUp: "Top up",
+  topupHeading: "Add credit",
+  topupFinePrint:
+    "One-off payment via Stripe. Credit does not expire and is used only for answers you receive.",
+  topupUnavailable: "Top-ups are not available right now. Please try again later.",
+  balanceTitle: "Your remaining credit",
+  outOfCredit: "You're out of credit. Top up to keep asking questions.",
+  answerCost: "This answer cost",
+  answerFree: "This answer was free of charge.",
 } as const;
